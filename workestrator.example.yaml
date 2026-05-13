@@ -1,0 +1,20 @@
+# workestrator config — copy to workestrator.yaml and customize.
+# ${VAR} references are expanded from the process environment.
+
+pearscarf:
+  mcp_url: ${PEARSCARF_MCP_URL}      # e.g. http://localhost:8090/sse
+  api_key: ${PEARSCARF_API_KEY}      # optional; omit/null when MCP is unauthenticated
+
+orchestrator:
+  poll_interval_seconds: 30          # how often to scan for new todo intents
+  max_concurrent_agents: 4           # parallel Claude sessions cap
+
+roles:
+  dir: ./roles                       # look up <role>/prompt.md here
+
+agent:
+  model: claude-sonnet-4-5           # which Claude model spawned agents use
+  max_turns: 50                      # per-session turn cap
+
+workspace:
+  dir: ./.workestrator/workspaces    # per-intent working directories
