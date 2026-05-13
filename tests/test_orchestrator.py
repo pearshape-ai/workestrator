@@ -8,6 +8,7 @@ and dependency satisfaction.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ import pytest
 from workestrator.config import (
     AgentConfig,
     Config,
+    EventsConfig,
     OrchestratorConfig,
     PearscarfConfig,
     RolesConfig,
@@ -32,6 +34,7 @@ def _config(tmp_path: Path, concurrency: int = 2) -> Config:
         roles=RolesConfig(dir=tmp_path / "roles"),
         agent=AgentConfig(),
         workspace=WorkspaceConfig(dir=tmp_path / "ws"),
+        events=EventsConfig(log_path=tmp_path / "events.jsonl"),
     )
 
 
@@ -149,6 +152,42 @@ def test_tick_dispatches_when_all_deps_done(tmp_path: Path) -> None:
         await w.tick(ps, runner)
         await asyncio.gather(*w._running.values(), return_exceptions=True)
         assert runner.calls == ["i3"]
+
+    asyncio.run(run())
+
+
+def test_tick_emits_dispatched_and_completion_events(tmp_path: Path) -> None:
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        w = Workestrator(cfg)
+        # intent_lookup makes _dispatch's get_intent return done, so the
+        # finally block emits intent_completed rather than intent_failed.
+        ps = FakePearscarf(
+            intents=[
+                {
+                    "intent_id": "i1",
+                    "owner": "hex",
+                    "owner_role": "head-eng",
+                    "title": "ship X",
+                    "body": "x",
+                }
+            ],
+            intent_lookup={"i1": {"intent_id": "i1", "status": "done"}},
+        )
+        runner = FakeRunner()
+        await w.tick(ps, runner)
+        await asyncio.gather(*w._running.values(), return_exceptions=True)
+
+        lines = cfg.events.log_path.read_text().strip().split("\n")
+        events = [json.loads(line) for line in lines]
+        kinds = [e["event"] for e in events]
+        assert "intent_dispatched" in kinds
+        assert "intent_completed" in kinds
+        dispatched = next(e for e in events if e["event"] == "intent_dispatched")
+        assert dispatched["intent_id"] == "i1"
+        assert dispatched["role"] == "head-eng"
+        assert dispatched["owner"] == "hex"
+        assert dispatched["title"] == "ship X"
 
     asyncio.run(run())
 

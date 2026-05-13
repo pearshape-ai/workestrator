@@ -66,6 +66,7 @@ See `workestrator.example.yaml`. Defaults:
 | `agent.model` | `claude-sonnet-4-5` | Model the spawned agents use |
 | `agent.max_turns` | `50` | Per-session turn cap |
 | `workspace.dir` | `./.workestrator/workspaces` | Per-intent working directories |
+| `events.log_path` | `./.workforce/events.jsonl` | NDJSON event stream (daemon + intent lifecycle) |
 
 `${VAR}` and `$VAR` references in string values are expanded from the process environment at load time.
 
@@ -86,10 +87,24 @@ asyncio.run(Workestrator(cfg).run())
 
 The orchestrator doesn't know about specific personas — only that each intent has an `owner` (e.g. `hex`) and / or `owner_role` (e.g. `head-eng`), and that the role's prompt lives at `<roles_dir>/<role>/prompt.md`. Drop a per-role prompt in that location; the orchestrator loads it as the system prompt for that intent's session.
 
+## Event stream
+
+Alongside the regular log, workestrator emits an append-only NDJSON event stream at the path configured by `events.log_path` (default `./.workforce/events.jsonl`). One JSON object per line:
+
+| `event` | When | Fields |
+|---|---|---|
+| `daemon_started` | After connecting to the pearscarf MCP | `poll_interval_seconds`, `max_concurrent_agents` |
+| `intent_dispatched` | Claimed an intent and spawned its session | `intent_id`, `role`, `owner`, `title` |
+| `intent_completed` | Session finished and the intent reached `done` or `cancelled` | `intent_id`, `role`, `owner`, `title`, `final_status` |
+| `intent_failed` | Session raised, or returned without flipping status to a terminal state | `intent_id`, `role`, `owner`, `title`, `error` |
+| `daemon_stopping` | Orchestrator received `CancelledError` (e.g. SIGTERM) | `in_flight` |
+
+Tail this file from a Claude Code Monitor, a dashboard, or any other consumer that wants real-time daemon state without polling pearscarf.
+
 ## What it does *not* do
 
 - No retry policy beyond "next poll picks it up again if status is still `todo`".
-- No agent-level observability — log lines only.
+- No agent-level observability beyond the event stream + log lines.
 - No multi-tenant safety. Trust your agents.
 - No PyPI release. Install from git.
 

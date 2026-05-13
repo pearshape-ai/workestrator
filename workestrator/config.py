@@ -44,12 +44,18 @@ class WorkspaceConfig:
 
 
 @dataclass
+class EventsConfig:
+    log_path: Path
+
+
+@dataclass
 class Config:
     pearscarf: PearscarfConfig
     orchestrator: OrchestratorConfig
     roles: RolesConfig
     agent: AgentConfig
     workspace: WorkspaceConfig
+    events: EventsConfig
 
 
 def _expand(value: Any) -> Any:
@@ -86,6 +92,7 @@ def load(config_path: Path) -> Config:
     roles_raw = raw.get("roles") or {}
     agent_raw = raw.get("agent") or {}
     workspace_raw = raw.get("workspace") or {}
+    events_raw = raw.get("events") or {}
 
     if not pearscarf_raw.get("mcp_url"):
         raise ValueError("pearscarf.mcp_url is required")
@@ -112,5 +119,8 @@ def load(config_path: Path) -> Config:
         ),
         workspace=WorkspaceConfig(
             dir=_resolve(base_dir, workspace_raw.get("dir", "./.workestrator/workspaces")),
+        ),
+        events=EventsConfig(
+            log_path=_resolve(base_dir, events_raw.get("log_path", "./.workforce/events.jsonl")),
         ),
     )

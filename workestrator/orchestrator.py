@@ -14,6 +14,7 @@ from typing import Any
 
 from workestrator.agent_runner import AgentRunner
 from workestrator.config import Config
+from workestrator.events import EventEmitter
 from workestrator.pearscarf_client import PearscarfClient
 from workestrator.workspace import WorkspaceManager
 
@@ -24,6 +25,7 @@ class Workestrator:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.workspace = WorkspaceManager(config.workspace.dir)
+        self.events = EventEmitter(config.events.log_path)
         self._running: dict[str, asyncio.Task] = {}
 
     async def run(self) -> None:
@@ -38,12 +40,18 @@ class Workestrator:
                 pearscarf_url=self.config.pearscarf.mcp_url,
                 pearscarf_api_key=self.config.pearscarf.api_key,
             )
+            self.events.emit(
+                "daemon_started",
+                poll_interval_seconds=self.config.orchestrator.poll_interval_seconds,
+                max_concurrent_agents=self.config.orchestrator.max_concurrent_agents,
+            )
             try:
                 while True:
                     await self.tick(pearscarf, agent_runner)
                     await asyncio.sleep(self.config.orchestrator.poll_interval_seconds)
             except asyncio.CancelledError:
                 logger.info("orchestrator cancelled — waiting for running agents")
+                self.events.emit("daemon_stopping", in_flight=len(self._running))
                 for task in self._running.values():
                     task.cancel()
                 if self._running:
@@ -78,6 +86,7 @@ class Workestrator:
             intent_id = _intent_id(intent)
             logger.info(f"claiming {intent_id}")
             await pearscarf.set_intent_status(intent_id, "in_progress", set_by="workestrator")
+            self.events.emit("intent_dispatched", **_intent_summary(intent))
             self._running[intent_id] = asyncio.create_task(
                 self._dispatch(intent, agent_runner, pearscarf)
             )
@@ -98,17 +107,29 @@ class Workestrator:
     ) -> None:
         intent_id = _intent_id(intent)
         workspace = self.workspace.for_intent(intent_id)
+        summary = _intent_summary(intent)
+        raised: Exception | None = None
         try:
             await agent_runner.run(intent, workspace=workspace)
         except Exception as exc:
             logger.exception(f"agent for {intent_id} raised: {exc}")
+            raised = exc
         finally:
             check = await pearscarf.get_intent(intent_id)
             final_status = (check or {}).get("status")
-            if final_status not in ("done", "cancelled"):
+            if raised is not None:
+                self.events.emit("intent_failed", **summary, error=str(raised))
+            elif final_status in ("done", "cancelled"):
+                self.events.emit("intent_completed", **summary, final_status=final_status)
+            else:
                 logger.warning(
                     f"agent for {intent_id} returned but status={final_status!r} — "
                     "agent didn't flip it; orchestrator leaves it for the next poll"
+                )
+                self.events.emit(
+                    "intent_failed",
+                    **summary,
+                    error=f"agent returned without terminal status (last seen: {final_status!r})",
                 )
 
 
@@ -118,3 +139,13 @@ def _intent_id(intent: dict[str, Any]) -> str:
     if not iid:
         raise ValueError(f"intent missing id field: {intent!r}")
     return str(iid)
+
+
+def _intent_summary(intent: dict[str, Any]) -> dict[str, Any]:
+    """Fields commonly surfaced on intent_* events."""
+    return {
+        "intent_id": _intent_id(intent),
+        "role": intent.get("owner_role"),
+        "owner": intent.get("owner"),
+        "title": intent.get("title"),
+    }
