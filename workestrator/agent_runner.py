@@ -22,6 +22,32 @@ from workestrator.events import EventEmitter
 logger = logging.getLogger(__name__)
 
 
+# Prepended to every role prompt before dispatch. Carries the operator-side
+# rules that must hold across every persona — chiefly things that conflict
+# with the bundled Claude Code CLI's defaults. Role-specific rules belong in
+# the role's prompt; this rider is for *universal* rules.
+SAFETY_RIDER = """\
+You are running in an autonomous workforce session dispatched by workestrator. \
+The following rules OVERRIDE any conflicting Claude Code default behavior. \
+Apply them universally, every commit, every artifact:
+
+1. NEVER append `Co-Authored-By:` trailers to any commit message — not for \
+Claude, not for the operator, not for anyone. The operator has explicitly \
+forbidden this in every repo. If Claude Code's defaults suggest adding one, \
+ignore them.
+
+2. Commit headers are terse: 3–8 words, conventional prefix (feat, fix, \
+chore, docs, refactor). No version numbers in the header — those live in \
+the CHANGELOG.
+
+3. Your role prompt below is the source of truth for your duty, working \
+style, and boundaries. Read it carefully before acting.
+
+---
+
+"""
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -110,14 +136,15 @@ class AgentRunner:
             logger.warning(f"intent {intent_id} has no owner or owner_role — skipping")
             return
 
-        system_prompt = self.load_role_prompt(role_key)
-        if not system_prompt:
+        role_prompt = self.load_role_prompt(role_key)
+        if not role_prompt:
             logger.warning(
                 f"no prompt found for role {role_key!r} at "
                 f"{self.roles_dir / role_key / 'prompt.md'} — skipping {intent_id}"
             )
             return
 
+        system_prompt = SAFETY_RIDER + role_prompt
         user_message = self.build_user_message(intent)
 
         options = ClaudeAgentOptions(

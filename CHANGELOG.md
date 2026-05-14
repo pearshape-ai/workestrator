@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.0
+- Every dispatched role prompt is now prefixed with a universal `SAFETY_RIDER` that carries operator-side rules conflicting with bundled Claude Code defaults — chiefly the prohibition on `Co-Authored-By:` commit trailers and the terse-header commit convention. Belt-and-suspenders against Claude Code defaults bleeding through into autonomous agent commits.
+
 ## 0.4.0
 - Workestrator now emits per-message events (`agent_text`, `agent_tool_use`) for every assistant turn inside a dispatched session, alongside the existing daemon + intent lifecycle events. A consumer tailing `events.jsonl` sees agent text and tool calls in near-real-time — what each persona is doing as they do it — without needing to open the transcript file.
 
