@@ -8,7 +8,9 @@ read context (`query_facts`, `get_intent`, …) and write outcomes
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,22 @@ from claude_agent_sdk import ClaudeAgentOptions, query
 from workestrator.config import AgentConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _msg_to_dict(msg: Any) -> dict[str, Any]:
+    """Best-effort conversion of a Claude Agent SDK message to a JSON-friendly dict."""
+    if hasattr(msg, "model_dump"):
+        try:
+            return msg.model_dump(mode="json")
+        except Exception:
+            pass
+    if isinstance(msg, dict):
+        return msg
+    return {"type": type(msg).__name__, "repr": repr(msg)}
 
 
 class AgentRunner:
@@ -86,10 +104,24 @@ class AgentRunner:
             max_turns=self.config.max_turns,
             model=self.config.model,
             cwd=str(workspace),
+            permission_mode="bypassPermissions",
         )
 
-        logger.info(f"dispatching {intent_id} → role={role_key!r} workspace={workspace}")
+        transcript_path = workspace / "transcript.jsonl"
+        logger.info(
+            f"dispatching {intent_id} → role={role_key!r} workspace={workspace} "
+            f"transcript={transcript_path}"
+        )
         message_count = 0
-        async for _msg in query(prompt=user_message, options=options):
+        async for msg in query(prompt=user_message, options=options):
             message_count += 1
+            try:
+                line = json.dumps(
+                    {"received_at": _now_iso(), "message": _msg_to_dict(msg)},
+                    default=str,
+                )
+                with transcript_path.open("a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            except Exception as exc:
+                logger.warning(f"transcript write failed for {intent_id}: {exc}")
         logger.info(f"agent for {intent_id} finished after {message_count} message(s)")

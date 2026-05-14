@@ -1,6 +1,6 @@
 """Workestrator — pearscarf-driven Claude orchestrator."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from workestrator.orchestrator import Workestrator
 
