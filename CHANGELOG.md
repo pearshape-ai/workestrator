@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.0
+- Personas are now loaded as `<role>/soul.md` + `<role>/skills.md` (both required), with an optional shared `<roles_dir>/_pearscarf.md` foundation prepended to every dispatched session. Splits persona identity from procedure and lifts shared PearScarf mechanics out of each role file. Replaces the previous single-file `prompt.md` shape.
+
 ## 0.5.0
 - Every dispatched role prompt is now prefixed with a universal `SAFETY_RIDER` that carries operator-side rules conflicting with bundled Claude Code defaults — chiefly the prohibition on `Co-Authored-By:` commit trailers and the terse-header commit convention. Belt-and-suspenders against Claude Code defaults bleeding through into autonomous agent commits.
 

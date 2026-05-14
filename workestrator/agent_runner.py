@@ -103,10 +103,25 @@ class AgentRunner:
         return intent.get("owner") or intent.get("owner_role")
 
     def load_role_prompt(self, role_key: str) -> str | None:
-        path = self.roles_dir / role_key / "prompt.md"
-        if not path.is_file():
+        """Assemble the dispatched session's system prompt.
+
+        Concatenates `<roles_dir>/<role>/soul.md` + `<roles_dir>/<role>/skills.md`.
+        Both files must exist; returns None otherwise (dispatch will skip the intent).
+
+        If `<roles_dir>/_pearscarf.md` exists, its content is prepended as a
+        shared foundation that describes PearScarf for every role.
+        """
+        role_dir = self.roles_dir / role_key
+        soul = role_dir / "soul.md"
+        skills = role_dir / "skills.md"
+        if not (soul.is_file() and skills.is_file()):
             return None
-        return path.read_text()
+
+        persona = soul.read_text() + "\n\n---\n\n" + skills.read_text()
+        shared = self.roles_dir / "_pearscarf.md"
+        if shared.is_file():
+            return shared.read_text() + "\n\n---\n\n" + persona
+        return persona
 
     def build_user_message(self, intent: dict[str, Any]) -> str:
         intent_id = intent.get("intent_id") or intent.get("id") or "(unknown)"

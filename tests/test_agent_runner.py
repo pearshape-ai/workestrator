@@ -38,16 +38,61 @@ def test_resolve_role_none_when_neither(tmp_path: Path) -> None:
     assert r.resolve_role_key({}) is None
 
 
-def test_load_role_prompt_reads_markdown(tmp_path: Path) -> None:
-    (tmp_path / "hex").mkdir()
-    (tmp_path / "hex" / "prompt.md").write_text("You are hex.")
-    r = _runner(tmp_path)
-    assert r.load_role_prompt("hex") == "You are hex."
-
-
 def test_load_role_prompt_missing_returns_none(tmp_path: Path) -> None:
     r = _runner(tmp_path)
     assert r.load_role_prompt("ghost") is None
+
+
+def test_load_role_prompt_split_format_concatenates(tmp_path: Path) -> None:
+    (tmp_path / "hex").mkdir()
+    (tmp_path / "hex" / "soul.md").write_text("# Hex soul")
+    (tmp_path / "hex" / "skills.md").write_text("# Hex skills")
+    r = _runner(tmp_path)
+    out = r.load_role_prompt("hex")
+    assert out is not None
+    assert "# Hex soul" in out
+    assert "# Hex skills" in out
+    # soul comes before skills, separated.
+    assert out.index("# Hex soul") < out.index("# Hex skills")
+
+
+def test_load_role_prompt_requires_both_files(tmp_path: Path) -> None:
+    """Only soul.md (no skills.md) → returns None. Only skills.md → returns None."""
+    (tmp_path / "soulonly").mkdir()
+    (tmp_path / "soulonly" / "soul.md").write_text("# soul only")
+    (tmp_path / "skillsonly").mkdir()
+    (tmp_path / "skillsonly" / "skills.md").write_text("# skills only")
+    r = _runner(tmp_path)
+    assert r.load_role_prompt("soulonly") is None
+    assert r.load_role_prompt("skillsonly") is None
+
+
+def test_load_role_prompt_prepends_shared_pearscarf(tmp_path: Path) -> None:
+    (tmp_path / "_pearscarf.md").write_text("# shared foundation")
+    (tmp_path / "hex").mkdir()
+    (tmp_path / "hex" / "soul.md").write_text("# Hex soul")
+    (tmp_path / "hex" / "skills.md").write_text("# Hex skills")
+    r = _runner(tmp_path)
+    out = r.load_role_prompt("hex")
+    assert out is not None
+    # Order: shared → soul → skills
+    assert (
+        out.index("# shared foundation")
+        < out.index("# Hex soul")
+        < out.index("# Hex skills")
+    )
+
+
+def test_load_role_prompt_without_shared_works(tmp_path: Path) -> None:
+    """When `_pearscarf.md` is absent, the persona loads on its own."""
+    (tmp_path / "hex").mkdir()
+    (tmp_path / "hex" / "soul.md").write_text("just soul")
+    (tmp_path / "hex" / "skills.md").write_text("just skills")
+    r = _runner(tmp_path)
+    out = r.load_role_prompt("hex")
+    assert out is not None
+    assert "just soul" in out
+    assert "just skills" in out
 
 
 def test_build_user_message_wraps_body(tmp_path: Path) -> None:
