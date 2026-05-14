@@ -17,6 +17,7 @@ from typing import Any
 from claude_agent_sdk import ClaudeAgentOptions, query
 
 from workestrator.config import AgentConfig
+from workestrator.events import EventEmitter
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,25 @@ def _msg_to_dict(msg: Any) -> dict[str, Any]:
     return {"type": type(msg).__name__, "repr": repr(msg)}
 
 
+def _trunc(s: str, n: int = 240) -> str:
+    """Truncate a string for operator-visible events."""
+    s = (s or "").strip()
+    return s if len(s) <= n else s[:n].rstrip() + "…"
+
+
+def _summarize_tool_input(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """One-line summary of a tool call for operator visibility."""
+    if tool_name == "Bash":
+        return _trunc(tool_input.get("command") or "", 200)
+    if tool_name in ("Read", "Edit", "Write"):
+        return _trunc(tool_input.get("file_path") or tool_input.get("path") or "", 200)
+    # MCP tools (`mcp__pearscarf__query_facts`, etc.) or anything else — dump args.
+    try:
+        return _trunc(json.dumps(tool_input, default=str), 200)
+    except Exception:
+        return _trunc(str(tool_input), 200)
+
+
 class AgentRunner:
     def __init__(
         self,
@@ -44,11 +64,13 @@ class AgentRunner:
         roles_dir: Path,
         pearscarf_url: str,
         pearscarf_api_key: str | None = None,
+        events: EventEmitter | None = None,
     ) -> None:
         self.config = config
         self.roles_dir = Path(roles_dir)
         self.pearscarf_url = pearscarf_url
         self.pearscarf_api_key = pearscarf_api_key
+        self.events = events
 
     def resolve_role_key(self, intent: dict[str, Any]) -> str | None:
         """Prefer `owner` (specific identity) over `owner_role` (function)."""
@@ -115,13 +137,56 @@ class AgentRunner:
         message_count = 0
         async for msg in query(prompt=user_message, options=options):
             message_count += 1
+            msg_dict = _msg_to_dict(msg)
             try:
                 line = json.dumps(
-                    {"received_at": _now_iso(), "message": _msg_to_dict(msg)},
+                    {"received_at": _now_iso(), "message": msg_dict},
                     default=str,
                 )
                 with transcript_path.open("a", encoding="utf-8") as f:
                     f.write(line + "\n")
             except Exception as exc:
                 logger.warning(f"transcript write failed for {intent_id}: {exc}")
+            if self.events is not None:
+                self._emit_message_events(msg_dict, intent_id, role_key)
         logger.info(f"agent for {intent_id} finished after {message_count} message(s)")
+
+    def _emit_message_events(
+        self, msg_dict: dict[str, Any], intent_id: str, role: str
+    ) -> None:
+        """Surface assistant text + tool_use as operator-visible events."""
+        if self.events is None:
+            return
+        msg_type = msg_dict.get("type") or ""
+        # Claude Agent SDK uses 'AssistantMessage' / 'assistant' across versions.
+        if msg_type not in ("AssistantMessage", "assistant"):
+            return
+        content = msg_dict.get("content")
+        if isinstance(content, str):
+            if content.strip():
+                self.events.emit(
+                    "agent_text", intent_id=intent_id, role=role, text=_trunc(content)
+                )
+            return
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "text":
+                text = (block.get("text") or "").strip()
+                if text:
+                    self.events.emit(
+                        "agent_text", intent_id=intent_id, role=role, text=_trunc(text)
+                    )
+            elif btype == "tool_use":
+                tool_name = block.get("name") or "?"
+                tool_input = block.get("input") or {}
+                self.events.emit(
+                    "agent_tool_use",
+                    intent_id=intent_id,
+                    role=role,
+                    tool=tool_name,
+                    summary=_summarize_tool_input(tool_name, tool_input),
+                )

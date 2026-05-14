@@ -39,6 +39,7 @@ class Workestrator:
                 roles_dir=self.config.roles.dir,
                 pearscarf_url=self.config.pearscarf.mcp_url,
                 pearscarf_api_key=self.config.pearscarf.api_key,
+                events=self.events,
             )
             self.events.emit(
                 "daemon_started",
