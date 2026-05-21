@@ -1,6 +1,6 @@
 [project]
 name = "workestrator"
-description = "Pearscarf-driven Claude orchestrator: polls intents, dispatches Claude agents, watches for completion."
+description = "Pearscarf-driven agent orchestrator: polls intents, dispatches agent sessions via per-runtime adapters (Claude today; codex/hermes/… via the adapter seam), watches for completion."
 dynamic = ["version"]
 license = { text = "MIT" }
 readme = "README.md"
@@ -11,7 +11,6 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "claude-agent-sdk",
     "click",
     "mcp",
     "pyyaml",

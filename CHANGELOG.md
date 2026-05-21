@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.0
+- Drop the `claude-agent-sdk` dependency. The Claude adapter has been on `claude --print` subprocess + stream-json parsing since 0.8.0; the SDK was unused as of 0.10.0 but still pulled in as a transitive install. Now removed from `pyproject.toml` and `uv.lock` ahead of the SDK's 2026-06-15 paid transition. Project description updated to reflect the runtime-agnostic orchestrator surface (Claude today via the adapter seam; codex/hermes/… can register as additional adapters).
+
 ## 0.10.0
 - Coordinator wake mechanism. The polling tick now also inspects `in_progress` intents where `intent_type="coordinator"`: for each, count children currently in flight (status `todo`/`in_progress`); if zero AND the time since the last wake exceeds the debounce window, re-dispatch the coordinator as a fresh session. Greg-shaped agents now correctly fire → exit → wait → fire-again as their children complete. Debounce defaults to 300s (configurable via `orchestrator.coordinator_wake_debounce_seconds`) and covers child-intent registration latency. The dispatch finally-block now distinguishes coordinator vs executor exits: coordinators that return cleanly without flipping their own status emit `coordinator_paused` and stay `in_progress` (waiting for the next wake); executors and any timeout/crash continue to force-cancel as in 0.9.0. New `coordinator_woken` event surfaces every wake.
 
