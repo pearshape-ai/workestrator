@@ -25,6 +25,10 @@ class PearscarfConfig:
 class OrchestratorConfig:
     poll_interval_seconds: int = 30
     max_concurrent_agents: int = 4
+    # Minimum seconds between consecutive wakes of the same coordinator intent.
+    # Covers child-intent registration latency and prevents wake floods when
+    # children complete in close succession.
+    coordinator_wake_debounce_seconds: int = 300
 
 
 @dataclass
@@ -112,6 +116,9 @@ def load(config_path: Path) -> Config:
         orchestrator=OrchestratorConfig(
             poll_interval_seconds=int(orch_raw.get("poll_interval_seconds", 30)),
             max_concurrent_agents=int(orch_raw.get("max_concurrent_agents", 4)),
+            coordinator_wake_debounce_seconds=int(
+                orch_raw.get("coordinator_wake_debounce_seconds", 300)
+            ),
         ),
         roles=RolesConfig(
             dir=_resolve(base_dir, roles_raw.get("dir", "./roles")),

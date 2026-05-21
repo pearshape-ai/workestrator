@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.10.0
+- Coordinator wake mechanism. The polling tick now also inspects `in_progress` intents where `intent_type="coordinator"`: for each, count children currently in flight (status `todo`/`in_progress`); if zero AND the time since the last wake exceeds the debounce window, re-dispatch the coordinator as a fresh session. Greg-shaped agents now correctly fire → exit → wait → fire-again as their children complete. Debounce defaults to 300s (configurable via `orchestrator.coordinator_wake_debounce_seconds`) and covers child-intent registration latency. The dispatch finally-block now distinguishes coordinator vs executor exits: coordinators that return cleanly without flipping their own status emit `coordinator_paused` and stay `in_progress` (waiting for the next wake); executors and any timeout/crash continue to force-cancel as in 0.9.0. New `coordinator_woken` event surfaces every wake.
+
 ## 0.9.0
 - Stuck-detection in the dispatch loop. Each dispatched session now has a wall-clock cap (default 3600s from `agent.default_max_duration_seconds`, override per-intent via `runtime_config.max_duration_seconds`); exceeding it terminates the agent task. When an agent exits without flipping its intent to a terminal status — whether via timeout, crash, or returning normally without setting `done`/`cancelled` — workestrator now force-flips the intent to `cancelled` via pearscarf so the next poll doesn't re-claim it, and emits `intent_failed` with a reason (`timeout after Ns` / `agent raised: …` / `agent returned without terminal status`). Closes the previous failure mode where a crashed agent's intent stayed stuck `in_progress` indefinitely.
 
