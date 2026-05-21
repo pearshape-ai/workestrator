@@ -22,7 +22,7 @@ from workestrator.config import (
     RolesConfig,
     WorkspaceConfig,
 )
-from workestrator.orchestrator import Workestrator, _intent_id
+from workestrator.orchestrator import Workestrator, _intent_id, _resolve_max_duration
 
 
 def _config(tmp_path: Path, concurrency: int = 2) -> Config:
@@ -188,6 +188,128 @@ def test_tick_emits_dispatched_and_completion_events(tmp_path: Path) -> None:
         assert dispatched["role"] == "head-eng"
         assert dispatched["owner"] == "hex"
         assert dispatched["title"] == "ship X"
+
+    asyncio.run(run())
+
+
+def test_resolve_max_duration_uses_runtime_config_override() -> None:
+    intent = {"runtime_config": {"max_duration_seconds": 120}}
+    assert _resolve_max_duration(intent, default=3600) == 120
+
+
+def test_resolve_max_duration_falls_back_to_default() -> None:
+    assert _resolve_max_duration({}, default=3600) == 3600
+    assert _resolve_max_duration({"runtime_config": {}}, default=3600) == 3600
+    assert _resolve_max_duration({"runtime_config": {"model": "sonnet"}}, default=3600) == 3600
+
+
+def test_resolve_max_duration_coerces_strings_to_int() -> None:
+    intent = {"runtime_config": {"max_duration_seconds": "1800"}}
+    assert _resolve_max_duration(intent, default=3600) == 1800
+
+
+class _StuckRunner:
+    """Agent finishes normally but never flips the intent status."""
+
+    async def run(self, intent: dict, workspace: Path) -> None:
+        return
+
+
+class _TimeoutRunner:
+    """Agent runs longer than the wait_for timeout (never returns)."""
+
+    async def run(self, intent: dict, workspace: Path) -> None:
+        await asyncio.sleep(10)
+
+
+class _RaisingRunner:
+    """Agent crashes mid-flight."""
+
+    async def run(self, intent: dict, workspace: Path) -> None:
+        raise RuntimeError("boom")
+
+
+def test_dispatch_force_cancels_when_agent_exits_without_terminal_status(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        w = Workestrator(cfg)
+        # No intent_lookup entry → get_intent returns None → final_status = None.
+        ps = FakePearscarf(intents=[{"intent_id": "i1", "owner": "hex", "body": "x"}])
+        await w.tick(ps, _StuckRunner())
+        await asyncio.gather(*w._running.values(), return_exceptions=True)
+
+        # Both the claim and the force-cancel should have happened.
+        assert ("i1", "in_progress") in ps.status_calls
+        assert ("i1", "cancelled") in ps.status_calls
+
+        events = [json.loads(line) for line in cfg.events.log_path.read_text().strip().split("\n")]
+        failed = next(e for e in events if e["event"] == "intent_failed")
+        assert "without terminal status" in failed["error"]
+
+    asyncio.run(run())
+
+
+def test_dispatch_force_cancels_when_agent_raises(tmp_path: Path) -> None:
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        w = Workestrator(cfg)
+        ps = FakePearscarf(intents=[{"intent_id": "i1", "owner": "hex", "body": "x"}])
+        await w.tick(ps, _RaisingRunner())
+        await asyncio.gather(*w._running.values(), return_exceptions=True)
+
+        assert ("i1", "cancelled") in ps.status_calls
+        events = [json.loads(line) for line in cfg.events.log_path.read_text().strip().split("\n")]
+        failed = next(e for e in events if e["event"] == "intent_failed")
+        assert "boom" in failed["error"]
+
+    asyncio.run(run())
+
+
+def test_dispatch_force_cancels_when_agent_times_out(tmp_path: Path) -> None:
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        w = Workestrator(cfg)
+        # Tight timeout via runtime_config so the test stays fast.
+        ps = FakePearscarf(
+            intents=[
+                {
+                    "intent_id": "i1",
+                    "owner": "hex",
+                    "body": "x",
+                    "runtime_config": {"max_duration_seconds": 0},
+                }
+            ]
+        )
+        await w.tick(ps, _TimeoutRunner())
+        await asyncio.gather(*w._running.values(), return_exceptions=True)
+
+        assert ("i1", "cancelled") in ps.status_calls
+        events = [json.loads(line) for line in cfg.events.log_path.read_text().strip().split("\n")]
+        failed = next(e for e in events if e["event"] == "intent_failed")
+        assert "timeout" in failed["error"]
+
+    asyncio.run(run())
+
+
+def test_dispatch_does_not_force_cancel_when_agent_set_done(tmp_path: Path) -> None:
+    """When the agent properly flips status → done, the force-cancel path is skipped."""
+
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        w = Workestrator(cfg)
+        ps = FakePearscarf(
+            intents=[{"intent_id": "i1", "owner": "hex", "body": "x"}],
+            intent_lookup={"i1": {"intent_id": "i1", "status": "done"}},
+        )
+        await w.tick(ps, _StuckRunner())  # noop runner; pretend the agent set done
+        await asyncio.gather(*w._running.values(), return_exceptions=True)
+
+        # Only the claim should be present; no force-cancel.
+        statuses = [s for _, s in ps.status_calls]
+        assert "in_progress" in statuses
+        assert "cancelled" not in statuses
 
     asyncio.run(run())
 

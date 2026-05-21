@@ -36,6 +36,9 @@ class RolesConfig:
 class AgentConfig:
     model: str = "claude-sonnet-4-5"
     max_turns: int = 50
+    # Default wall-clock cap per dispatched session. The intent's
+    # `runtime_config.max_duration_seconds` overrides this per intent.
+    default_max_duration_seconds: int = 3600
 
 
 @dataclass
@@ -116,6 +119,9 @@ def load(config_path: Path) -> Config:
         agent=AgentConfig(
             model=agent_raw.get("model", "claude-sonnet-4-5"),
             max_turns=int(agent_raw.get("max_turns", 50)),
+            default_max_duration_seconds=int(
+                agent_raw.get("default_max_duration_seconds", 3600)
+            ),
         ),
         workspace=WorkspaceConfig(
             dir=_resolve(base_dir, workspace_raw.get("dir", "./.workestrator/workspaces")),
