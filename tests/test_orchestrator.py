@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -39,15 +40,25 @@ def _config(tmp_path: Path, concurrency: int = 2) -> Config:
 
 
 class FakePearscarf:
-    """Records calls; returns canned data."""
+    """Records calls; returns canned data with minimal filter support."""
 
     def __init__(self, intents: list[dict], intent_lookup: dict[str, dict] | None = None) -> None:
         self.intents = intents
         self.intent_lookup = intent_lookup or {}
         self.status_calls: list[tuple[str, str]] = []
 
-    async def query_intents(self, **_kwargs):
-        return self.intents
+    async def query_intents(self, **kwargs):
+        """Honor status / intent_type / parent filters; missing fields use the
+        same defaults pearscarf would (`status="todo"`, `intent_type="executor"`)
+        so test intents stay minimal."""
+        results = self.intents
+        if (s := kwargs.get("status")) is not None:
+            results = [i for i in results if (i.get("status") or "todo") == s]
+        if (t := kwargs.get("intent_type")) is not None:
+            results = [i for i in results if (i.get("intent_type") or "executor") == t]
+        if (p := kwargs.get("parent")) is not None:
+            results = [i for i in results if i.get("parent_record_id") == p]
+        return results
 
     async def get_intent(self, intent_id: str, with_children: bool = False):
         return self.intent_lookup.get(intent_id)
@@ -310,6 +321,195 @@ def test_dispatch_does_not_force_cancel_when_agent_set_done(tmp_path: Path) -> N
         statuses = [s for _, s in ps.status_calls]
         assert "in_progress" in statuses
         assert "cancelled" not in statuses
+
+    asyncio.run(run())
+
+
+# --- coordinator wake mechanism ---
+
+
+def test_wake_coordinator_wakes_when_no_children_and_past_debounce(tmp_path: Path) -> None:
+    """A coordinator with zero in-flight children + past debounce → re-dispatch."""
+
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        cfg.orchestrator.coordinator_wake_debounce_seconds = 0  # no debounce
+        w = Workestrator(cfg)
+        coord = {
+            "intent_id": "c1",
+            "owner": "greg",
+            "intent_type": "coordinator",
+            "status": "in_progress",
+            "body": "coord",
+        }
+        ps = FakePearscarf(intents=[coord])
+        runner = FakeRunner()
+        await w.tick(ps, runner)
+        await asyncio.gather(*w._running.values(), return_exceptions=True)
+        # Coordinator was woken (re-dispatched) — runner saw it.
+        assert "c1" in runner.calls
+        events = [json.loads(line) for line in cfg.events.log_path.read_text().strip().split("\n")]
+        assert any(e["event"] == "coordinator_woken" for e in events)
+
+    asyncio.run(run())
+
+
+def test_wake_coordinator_skipped_when_children_in_flight(tmp_path: Path) -> None:
+    """A coordinator with at least one in_progress / todo child must wait for
+    the natural completion → no wake."""
+
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        cfg.orchestrator.coordinator_wake_debounce_seconds = 0
+        w = Workestrator(cfg)
+        coord = {
+            "intent_id": "c1",
+            "intent_type": "coordinator",
+            "status": "in_progress",
+            "body": "coord",
+        }
+        child = {
+            "intent_id": "child1",
+            "status": "in_progress",
+            "parent_record_id": "c1",
+            "body": "child",
+        }
+        ps = FakePearscarf(intents=[coord, child])
+        runner = FakeRunner()
+        await w.tick(ps, runner)
+        await asyncio.gather(*w._running.values(), return_exceptions=True)
+        # Coordinator NOT woken (child still in flight).
+        assert "c1" not in runner.calls
+
+    asyncio.run(run())
+
+
+def test_wake_coordinator_skipped_when_within_debounce(tmp_path: Path) -> None:
+    """A coordinator woken < debounce ago does not get woken again."""
+
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        cfg.orchestrator.coordinator_wake_debounce_seconds = 300
+        w = Workestrator(cfg)
+        # Simulate a recent wake by pre-populating _last_wake.
+        w._last_wake["c1"] = time.monotonic()
+        coord = {
+            "intent_id": "c1",
+            "intent_type": "coordinator",
+            "status": "in_progress",
+            "body": "coord",
+        }
+        ps = FakePearscarf(intents=[coord])
+        runner = FakeRunner()
+        await w.tick(ps, runner)
+        await asyncio.gather(*w._running.values(), return_exceptions=True)
+        assert "c1" not in runner.calls
+
+    asyncio.run(run())
+
+
+def test_wake_coordinator_skipped_when_already_running(tmp_path: Path) -> None:
+    """A coordinator with an in-flight dispatch task is not re-dispatched."""
+
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        cfg.orchestrator.coordinator_wake_debounce_seconds = 0
+        w = Workestrator(cfg)
+
+        async def never() -> None:
+            await asyncio.sleep(10)
+
+        running_task = asyncio.create_task(never())
+        w._running["c1"] = running_task
+        try:
+            coord = {
+                "intent_id": "c1",
+                "intent_type": "coordinator",
+                "status": "in_progress",
+                "body": "coord",
+            }
+            ps = FakePearscarf(intents=[coord])
+            runner = FakeRunner()
+            await w.tick(ps, runner)
+            assert "c1" not in runner.calls
+        finally:
+            running_task.cancel()
+            await asyncio.gather(running_task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_dispatch_emits_coordinator_paused_on_normal_exit(tmp_path: Path) -> None:
+    """A coordinator that exits cleanly without setting terminal status →
+    emit coordinator_paused, leave in_progress (do NOT force-cancel)."""
+
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        cfg.orchestrator.coordinator_wake_debounce_seconds = 0
+        w = Workestrator(cfg)
+        coord = {
+            "intent_id": "c1",
+            "owner": "greg",
+            "intent_type": "coordinator",
+            "status": "in_progress",
+            "body": "coord",
+        }
+        ps = FakePearscarf(intents=[coord])
+        # Pre-bypass the wake path by marking last_wake as recent so tick doesn't
+        # immediately re-dispatch the coordinator a second time after _dispatch
+        # finishes inside this tick. We test the dispatch finally-block in
+        # isolation by spawning it directly.
+        w._last_wake["c1"] = time.monotonic()
+        await w._dispatch(coord, _StuckRunner(), ps)
+
+        # No force-cancel — coordinator-paused is the right outcome.
+        assert "cancelled" not in [s for _, s in ps.status_calls]
+        events = [json.loads(line) for line in cfg.events.log_path.read_text().strip().split("\n")]
+        kinds = [e["event"] for e in events]
+        assert "coordinator_paused" in kinds
+        assert "intent_failed" not in kinds
+
+    asyncio.run(run())
+
+
+def test_dispatch_force_cancels_coordinator_on_timeout(tmp_path: Path) -> None:
+    """Coordinator timeouts are still failures — force-cancel applies."""
+
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        w = Workestrator(cfg)
+        coord = {
+            "intent_id": "c1",
+            "intent_type": "coordinator",
+            "status": "in_progress",
+            "body": "coord",
+            "runtime_config": {"max_duration_seconds": 0},
+        }
+        ps = FakePearscarf(intents=[coord])
+        await w._dispatch(coord, _TimeoutRunner(), ps)
+        assert ("c1", "cancelled") in ps.status_calls
+        events = [json.loads(line) for line in cfg.events.log_path.read_text().strip().split("\n")]
+        failed = next(e for e in events if e["event"] == "intent_failed")
+        assert "timeout" in failed["error"]
+
+    asyncio.run(run())
+
+
+def test_dispatch_force_cancels_coordinator_on_raise(tmp_path: Path) -> None:
+    """Coordinator crashes are still failures — force-cancel applies."""
+
+    async def run() -> None:
+        cfg = _config(tmp_path)
+        w = Workestrator(cfg)
+        coord = {
+            "intent_id": "c1",
+            "intent_type": "coordinator",
+            "status": "in_progress",
+            "body": "coord",
+        }
+        ps = FakePearscarf(intents=[coord])
+        await w._dispatch(coord, _RaisingRunner(), ps)
+        assert ("c1", "cancelled") in ps.status_calls
 
     asyncio.run(run())
 

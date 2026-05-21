@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from workestrator.agent_runner import AgentRunner
@@ -27,6 +28,9 @@ class Workestrator:
         self.workspace = WorkspaceManager(config.workspace.dir)
         self.events = EventEmitter(config.events.log_path)
         self._running: dict[str, asyncio.Task] = {}
+        # Monotonic timestamp of the most-recent dispatch per intent. Used to
+        # debounce coordinator wakes — see `_wake_coordinators`.
+        self._last_wake: dict[str, float] = {}
 
     async def run(self) -> None:
         """Run the orchestrator loop until cancelled."""
@@ -64,6 +68,11 @@ class Workestrator:
         # Reap finished work.
         self._running = {iid: t for iid, t in self._running.items() if not t.done()}
 
+        # Wake-eligible coordinators get priority over new todos: a stuck
+        # coordinator gates its whole subtree, so resolving its next step
+        # pushes the system forward.
+        await self._wake_coordinators(pearscarf, agent_runner)
+
         slots = self.config.orchestrator.max_concurrent_agents - len(self._running)
         if slots <= 0:
             return
@@ -88,9 +97,58 @@ class Workestrator:
             logger.info(f"claiming {intent_id}")
             await pearscarf.set_intent_status(intent_id, "in_progress", set_by="workestrator")
             self.events.emit("intent_dispatched", **_intent_summary(intent))
+            self._last_wake[intent_id] = time.monotonic()
             self._running[intent_id] = asyncio.create_task(
                 self._dispatch(intent, agent_runner, pearscarf)
             )
+
+    async def _wake_coordinators(
+        self, pearscarf: PearscarfClient, agent_runner: AgentRunner
+    ) -> None:
+        """Re-dispatch any in_progress coordinator with zero in-flight children
+        whose last wake is past the debounce window.
+
+        A coordinator's session is stateless: each wake re-reads graph state
+        (its own intent body, children's statuses) and decides what to do next.
+        Workestrator's job is to keep waking it whenever there's nothing in
+        flight to wait on — until the coordinator itself flips status to
+        `done` or `cancelled`.
+        """
+        slots = self.config.orchestrator.max_concurrent_agents - len(self._running)
+        if slots <= 0:
+            return
+
+        coordinators = await pearscarf.query_intents(
+            status="in_progress", intent_type="coordinator"
+        )
+        if not coordinators:
+            return
+
+        now = time.monotonic()
+        debounce = self.config.orchestrator.coordinator_wake_debounce_seconds
+
+        for intent in coordinators:
+            if slots <= 0:
+                break
+            intent_id = _intent_id(intent)
+            if intent_id in self._running:
+                continue  # currently dispatched; will naturally complete on its own
+            last = self._last_wake.get(intent_id)
+            if last is not None and (now - last) < debounce:
+                continue  # too soon since last wake
+            children = await pearscarf.query_intents(parent=intent_id)
+            in_flight = [
+                c for c in (children or []) if c.get("status") in ("todo", "in_progress")
+            ]
+            if in_flight:
+                continue  # naturally woken when last child completes
+
+            self.events.emit("coordinator_woken", **_intent_summary(intent))
+            self._last_wake[intent_id] = now
+            self._running[intent_id] = asyncio.create_task(
+                self._dispatch(intent, agent_runner, pearscarf)
+            )
+            slots -= 1
 
     async def _deps_satisfied(self, pearscarf: PearscarfClient, intent: dict[str, Any]) -> bool:
         deps = intent.get("depends_on") or []
@@ -128,12 +186,18 @@ class Workestrator:
         finally:
             check = await pearscarf.get_intent(intent_id)
             final_status = (check or {}).get("status")
+            is_coordinator = intent.get("intent_type") == "coordinator"
             if final_status in ("done", "cancelled"):
                 self.events.emit("intent_completed", **summary, final_status=final_status)
+            elif is_coordinator and not timed_out and raised is None:
+                # Normal coordinator exit: dispatched children (or decided to
+                # wait) and returned cleanly without flipping its own status.
+                # Leave it in_progress — `_wake_coordinators` will re-dispatch
+                # when a child completes or the debounce window elapses.
+                self.events.emit("coordinator_paused", **summary)
             else:
-                # Agent exited (or timed out / crashed) without flipping to a
-                # terminal state. Force-cancel so the next poll doesn't
-                # re-dispatch, and surface why via the event stream.
+                # Executor exit-without-done, or any timeout / crash. Force-
+                # cancel so the next poll doesn't re-claim, and surface why.
                 if timed_out:
                     reason = f"timeout after {timeout}s"
                 elif raised is not None:
