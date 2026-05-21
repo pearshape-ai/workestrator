@@ -14,8 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions, query
-
+from workestrator.adapters import Adapter, ClaudeAdapter
 from workestrator.config import AgentConfig
 from workestrator.events import EventEmitter
 
@@ -52,18 +51,6 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _msg_to_dict(msg: Any) -> dict[str, Any]:
-    """Best-effort conversion of a Claude Agent SDK message to a JSON-friendly dict."""
-    if hasattr(msg, "model_dump"):
-        try:
-            return msg.model_dump(mode="json")
-        except Exception:
-            pass
-    if isinstance(msg, dict):
-        return msg
-    return {"type": type(msg).__name__, "repr": repr(msg)}
-
-
 def _trunc(s: str, n: int = 240) -> str:
     """Truncate a string for operator-visible events."""
     s = (s or "").strip()
@@ -97,6 +84,24 @@ class AgentRunner:
         self.pearscarf_url = pearscarf_url
         self.pearscarf_api_key = pearscarf_api_key
         self.events = events
+        # Runtime → adapter instance. Dispatched intents are routed via
+        # `intent.runtime`. Add new adapters here as runtimes are supported.
+        self._adapters: dict[str, Adapter] = {
+            "claude": ClaudeAdapter(
+                config=config,
+                pearscarf_url=pearscarf_url,
+                pearscarf_api_key=pearscarf_api_key,
+            ),
+        }
+
+    def get_adapter(self, runtime: str) -> Adapter:
+        """Resolve a runtime selector to its adapter. Fails loud on unknown."""
+        if runtime not in self._adapters:
+            raise ValueError(
+                f"no adapter registered for runtime={runtime!r}; "
+                f"known: {sorted(self._adapters)}"
+            )
+        return self._adapters[runtime]
 
     def resolve_role_key(self, intent: dict[str, Any]) -> str | None:
         """Prefer `owner` (specific identity) over `owner_role` (function)."""
@@ -138,12 +143,6 @@ class AgentRunner:
             f"{body}"
         )
 
-    def _build_mcp_servers(self) -> dict[str, dict[str, Any]]:
-        server: dict[str, Any] = {"type": "sse", "url": self.pearscarf_url}
-        if self.pearscarf_api_key:
-            server["headers"] = {"Authorization": f"Bearer {self.pearscarf_api_key}"}
-        return {"pearscarf": server}
-
     async def run(self, intent: dict[str, Any], workspace: Path) -> None:
         intent_id = intent.get("intent_id") or intent.get("id") or "(unknown)"
         role_key = self.resolve_role_key(intent)
@@ -159,27 +158,35 @@ class AgentRunner:
             )
             return
 
+        runtime = intent.get("runtime")
+        if not runtime:
+            logger.error(
+                f"intent {intent_id} has no `runtime` field — skipping. "
+                "Ensure pearscarf >= 1.39.1 (which adds the runtime envelope)."
+            )
+            return
+        try:
+            adapter = self.get_adapter(runtime)
+        except ValueError as exc:
+            logger.error(f"intent {intent_id}: {exc} — skipping")
+            return
+
         system_prompt = SAFETY_RIDER + role_prompt
         user_message = self.build_user_message(intent)
 
-        options = ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            mcp_servers=self._build_mcp_servers(),
-            max_turns=self.config.max_turns,
-            model=self.config.model,
-            cwd=str(workspace),
-            permission_mode="bypassPermissions",
-        )
-
         transcript_path = workspace / "transcript.jsonl"
         logger.info(
-            f"dispatching {intent_id} → role={role_key!r} workspace={workspace} "
-            f"transcript={transcript_path}"
+            f"dispatching {intent_id} → role={role_key!r} runtime={runtime!r} "
+            f"workspace={workspace} transcript={transcript_path}"
         )
         message_count = 0
-        async for msg in query(prompt=user_message, options=options):
+        async for msg_dict in adapter.dispatch(
+            intent=intent,
+            workspace=workspace,
+            system_prompt=system_prompt,
+            user_message=user_message,
+        ):
             message_count += 1
-            msg_dict = _msg_to_dict(msg)
             try:
                 line = json.dumps(
                     {"received_at": _now_iso(), "message": msg_dict},
