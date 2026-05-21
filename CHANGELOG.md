@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.0
+- `ClaudeAdapter` now spawns `claude --print --output-format stream-json --verbose ...` as a subprocess instead of calling `claude-agent-sdk.query()`. Decouples workestrator from the SDK ahead of its 2026-06-15 paid transition; sessions inherit the operator's Claude Code subscription auth (OAuth via keychain). Per-intent dispatch knobs come from `intent.runtime_config`: `chrome_required` → `--chrome`, `model` → `--model`, `max_budget_usd` → `--max-budget-usd`. Pearscarf MCP wires via `--mcp-config` JSON. Stream-json events are parsed line-by-line; `assistant` events are normalized to the prior SDK message shape so the core's per-message event emitter (`agent_text`, `agent_tool_use`) stays unchanged.
+
 ## 0.7.0
 - Introduce a runtime-adapter seam in the dispatcher. `AgentRunner` now resolves an adapter from `intent.runtime` (e.g. `"claude"`) and routes the session through `Adapter.dispatch(intent, workspace, system_prompt, user_message) -> AsyncIterator[dict]`. Pure refactor — no behavior change. The existing claude-agent-sdk call moves into `workestrator/adapters/claude.py` verbatim; follow-up commits replace its internals with `claude --print` subprocess + stream-json. Sets the structure for non-Claude runtimes (codex, hermes, …) to register here without touching core orchestrator logic.
 
