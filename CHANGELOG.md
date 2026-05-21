@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.9.0
+- Stuck-detection in the dispatch loop. Each dispatched session now has a wall-clock cap (default 3600s from `agent.default_max_duration_seconds`, override per-intent via `runtime_config.max_duration_seconds`); exceeding it terminates the agent task. When an agent exits without flipping its intent to a terminal status — whether via timeout, crash, or returning normally without setting `done`/`cancelled` — workestrator now force-flips the intent to `cancelled` via pearscarf so the next poll doesn't re-claim it, and emits `intent_failed` with a reason (`timeout after Ns` / `agent raised: …` / `agent returned without terminal status`). Closes the previous failure mode where a crashed agent's intent stayed stuck `in_progress` indefinitely.
+
 ## 0.8.0
 - `ClaudeAdapter` now spawns `claude --print --output-format stream-json --verbose ...` as a subprocess instead of calling `claude-agent-sdk.query()`. Decouples workestrator from the SDK ahead of its 2026-06-15 paid transition; sessions inherit the operator's Claude Code subscription auth (OAuth via keychain). Per-intent dispatch knobs come from `intent.runtime_config`: `chrome_required` → `--chrome`, `model` → `--model`, `max_budget_usd` → `--max-budget-usd`. Pearscarf MCP wires via `--mcp-config` JSON. Stream-json events are parsed line-by-line; `assistant` events are normalized to the prior SDK message shape so the core's per-message event emitter (`agent_text`, `agent_tool_use`) stays unchanged.
 

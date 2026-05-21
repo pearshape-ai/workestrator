@@ -109,29 +109,60 @@ class Workestrator:
         intent_id = _intent_id(intent)
         workspace = self.workspace.for_intent(intent_id)
         summary = _intent_summary(intent)
+        timeout = _resolve_max_duration(intent, self.config.agent.default_max_duration_seconds)
         raised: Exception | None = None
+        timed_out = False
         try:
-            await agent_runner.run(intent, workspace=workspace)
+            await asyncio.wait_for(
+                agent_runner.run(intent, workspace=workspace),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"agent for {intent_id} exceeded max_duration={timeout}s — terminating"
+            )
+            timed_out = True
         except Exception as exc:
             logger.exception(f"agent for {intent_id} raised: {exc}")
             raised = exc
         finally:
             check = await pearscarf.get_intent(intent_id)
             final_status = (check or {}).get("status")
-            if raised is not None:
-                self.events.emit("intent_failed", **summary, error=str(raised))
-            elif final_status in ("done", "cancelled"):
+            if final_status in ("done", "cancelled"):
                 self.events.emit("intent_completed", **summary, final_status=final_status)
             else:
-                logger.warning(
-                    f"agent for {intent_id} returned but status={final_status!r} — "
-                    "agent didn't flip it; orchestrator leaves it for the next poll"
-                )
-                self.events.emit(
-                    "intent_failed",
-                    **summary,
-                    error=f"agent returned without terminal status (last seen: {final_status!r})",
-                )
+                # Agent exited (or timed out / crashed) without flipping to a
+                # terminal state. Force-cancel so the next poll doesn't
+                # re-dispatch, and surface why via the event stream.
+                if timed_out:
+                    reason = f"timeout after {timeout}s"
+                elif raised is not None:
+                    reason = f"agent raised: {raised}"
+                else:
+                    reason = (
+                        f"agent returned without terminal status "
+                        f"(last seen: {final_status!r})"
+                    )
+                try:
+                    await pearscarf.set_intent_status(
+                        intent_id, "cancelled", set_by="workestrator"
+                    )
+                except Exception as flip_exc:
+                    logger.warning(
+                        f"force-cancel for {intent_id} failed: {flip_exc} — "
+                        "intent may re-dispatch"
+                    )
+                self.events.emit("intent_failed", **summary, error=reason)
+
+
+def _resolve_max_duration(intent: dict[str, Any], default: int) -> int:
+    """Per-intent timeout override lives in `runtime_config.max_duration_seconds`;
+    fall back to the orchestrator-side default."""
+    rc = intent.get("runtime_config") or {}
+    value = rc.get("max_duration_seconds")
+    if value is None:
+        return int(default)
+    return int(value)
 
 
 def _intent_id(intent: dict[str, Any]) -> str:
