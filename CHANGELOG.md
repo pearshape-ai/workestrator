@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.7.0
+- Introduce a runtime-adapter seam in the dispatcher. `AgentRunner` now resolves an adapter from `intent.runtime` (e.g. `"claude"`) and routes the session through `Adapter.dispatch(intent, workspace, system_prompt, user_message) -> AsyncIterator[dict]`. Pure refactor — no behavior change. The existing claude-agent-sdk call moves into `workestrator/adapters/claude.py` verbatim; follow-up commits replace its internals with `claude --print` subprocess + stream-json. Sets the structure for non-Claude runtimes (codex, hermes, …) to register here without touching core orchestrator logic.
+
 ## 0.6.0
 - Personas are now loaded as `<role>/soul.md` + `<role>/skills.md` (both required), with an optional shared `<roles_dir>/_pearscarf.md` foundation prepended to every dispatched session. Splits persona identity from procedure and lifts shared PearScarf mechanics out of each role file. Replaces the previous single-file `prompt.md` shape.
 
