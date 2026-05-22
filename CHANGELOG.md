@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1
+- Switch the orchestrator's pearscarf client + the Claude adapter's MCP-config-for-subprocess to the streamable-HTTP transport, matching pearscarf 1.40.1 which retired SSE. `workestrator/pearscarf_client.py` now imports `mcp.client.streamable_http.streamablehttp_client` (3-tuple return; the get-session-id callable is ignored), and the JSON the Claude adapter writes via `--mcp-config` declares `"type": "http"` for the pearscarf server instead of `"sse"`. Without this fix the daemon connected to the new `/mcp` URL with SSE semantics and got a 400 Bad Request on every poll, never reaching pearscarf.
+- Fix the wake-loop's `query_intents` call. The orchestrator was passing `intent_type=` (the pearscarf-side schema name), but the client's signature uses `type=` (matching the MCP tool's actual kwarg). The mismatch raised `TypeError: query_intents() got an unexpected keyword argument 'intent_type'` on the first tick of every coordinator-aware run, crashing the daemon. Now passes `type="coordinator"`.
+
 ## 0.11.0
 - Drop the `claude-agent-sdk` dependency. The Claude adapter has been on `claude --print` subprocess + stream-json parsing since 0.8.0; the SDK was unused as of 0.10.0 but still pulled in as a transitive install. Now removed from `pyproject.toml` and `uv.lock` ahead of the SDK's 2026-06-15 paid transition. Project description updated to reflect the runtime-agnostic orchestrator surface (Claude today via the adapter seam; codex/hermes/… can register as additional adapters).
 

@@ -119,7 +119,7 @@ class Workestrator:
             return
 
         coordinators = await pearscarf.query_intents(
-            status="in_progress", intent_type="coordinator"
+            status="in_progress", type="coordinator"
         )
         if not coordinators:
             return

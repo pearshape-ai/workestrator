@@ -59,12 +59,12 @@ def _adapter(model: str = "claude-sonnet-4-6") -> ClaudeAdapter:
 
 def test_build_mcp_config_includes_pearscarf_with_auth() -> None:
     """The MCP config JSON the adapter passes via `--mcp-config` must carry
-    the pearscarf SSE URL + Bearer auth header."""
+    the pearscarf streamable-HTTP URL + Bearer auth header."""
     cfg = json.loads(_adapter()._build_mcp_config())
     assert cfg == {
         "mcpServers": {
             "pearscarf": {
-                "type": "sse",
+                "type": "http",
                 "url": "http://localhost:8090/sse",
                 "headers": {"Authorization": "Bearer testkey"},
             }

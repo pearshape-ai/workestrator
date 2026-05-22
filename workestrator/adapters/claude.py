@@ -66,7 +66,7 @@ class ClaudeAdapter:
 
     def _build_mcp_config(self) -> str:
         """JSON string for the `--mcp-config` flag — pearscarf only for now."""
-        server: dict[str, Any] = {"type": "sse", "url": self.pearscarf_url}
+        server: dict[str, Any] = {"type": "http", "url": self.pearscarf_url}
         if self.pearscarf_api_key:
             server["headers"] = {"Authorization": f"Bearer {self.pearscarf_api_key}"}
         return json.dumps({"mcpServers": {"pearscarf": server}})
