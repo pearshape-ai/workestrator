@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+
+import pytest
 
 from workestrator.agent_runner import (
     AgentRunner,
@@ -45,6 +48,28 @@ def test_resolve_role_none_when_neither(tmp_path: Path) -> None:
 def test_load_role_prompt_missing_returns_none(tmp_path: Path) -> None:
     r = _runner(tmp_path)
     assert r.load_role_prompt("ghost") is None
+
+
+def test_run_raises_when_intent_has_no_role_key(tmp_path: Path) -> None:
+    """No owner / no owner_role → ValueError so the orchestrator can surface
+    intent_failed rather than mistaking it for a clean coordinator pause."""
+    r = _runner(tmp_path)
+    with pytest.raises(ValueError, match="no owner or owner_role"):
+        asyncio.run(r.run({"intent_id": "intent_x"}, workspace=tmp_path / "ws"))
+
+
+def test_run_raises_when_role_manifest_missing(tmp_path: Path) -> None:
+    """owner_role resolves but the directory has no soul.md / skills.md →
+    FileNotFoundError so the orchestrator force-cancels + emits
+    intent_failed instead of silently emitting coordinator_paused."""
+    r = _runner(tmp_path)
+    with pytest.raises(FileNotFoundError, match="no role manifest"):
+        asyncio.run(
+            r.run(
+                {"intent_id": "intent_x", "owner_role": "ghost", "owner": "Ghost"},
+                workspace=tmp_path / "ws",
+            )
+        )
 
 
 def test_load_role_prompt_split_format_concatenates(tmp_path: Path) -> None:

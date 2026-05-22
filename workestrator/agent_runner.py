@@ -155,17 +155,22 @@ class AgentRunner:
         intent_id = intent.get("intent_id") or intent.get("id") or "(unknown)"
         role_key = self.resolve_role_key(intent)
         if not role_key:
-            logger.warning(f"intent {intent_id} has no owner or owner_role — skipping")
-            return
+            # Raise rather than silently return — the orchestrator's
+            # _dispatch finally block treats a clean return on an
+            # in_progress coordinator as a "natural pause" and emits
+            # coordinator_paused, which would be misleading here (we
+            # never actually dispatched anything).
+            raise ValueError(
+                f"intent {intent_id} has no owner or owner_role — "
+                "cannot resolve a role directory"
+            )
 
         role_prompt = self.load_role_prompt(role_key)
         if not role_prompt:
-            logger.warning(
-                f"no role manifest found for {role_key!r} at "
-                f"{self.roles_dir / role_key}/ (expected soul.md + skills.md) — "
-                f"skipping {intent_id}"
+            raise FileNotFoundError(
+                f"no role manifest at {self.roles_dir / role_key}/ "
+                f"(expected soul.md + skills.md) for intent {intent_id}"
             )
-            return
 
         runtime = intent.get("runtime")
         if not runtime:
