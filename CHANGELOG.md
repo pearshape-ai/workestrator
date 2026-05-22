@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.11.3
+- `AgentRunner.run` now raises on undispatchable intents instead of silently early-returning. An intent without `owner_role` (and without `owner`) raises `ValueError`; an intent whose role manifest can't be loaded (missing `soul.md` / `skills.md` under `<roles_dir>/<owner_role>/`) raises `FileNotFoundError`. The orchestrator's `_dispatch` already catches `Exception`, force-cancels via `set_intent_status('cancelled')`, and emits `intent_failed` — so the failure mode now surfaces honestly in the events stream instead of being mis-reported as a clean `coordinator_paused`.
+
 ## 0.11.2
 - Fix role-directory resolution. `AgentRunner.resolve_role_key` was preferring `owner` (the agent's identity, e.g. `Greg`, `Linus`) over `owner_role` (the canonical role-path slug, e.g. `gtm`, `gtm/linkedin-prospecting`) when picking the directory under `roles_dir`. That meant a coordinator intent with `owner=Greg, owner_role=gtm` led to a lookup at `<roles_dir>/Greg/` which doesn't exist, and the intent was silently skipped at every poll. Now prefers `owner_role` and falls back to `owner` only when `owner_role` is missing. Companion cleanup: the role-not-found warning now mentions the actual files the loader looks for (`soul.md` + `skills.md`) instead of the stale `prompt.md` filename, and the module docstring matches the loader's real shape.
 
