@@ -1,8 +1,13 @@
 """Thin MCP client for pearscarf.
 
-Wraps the SSE transport from the `mcp` SDK and exposes the handful of
-pearscarf tools the orchestrator actually calls. JSON tool-result payloads
-are decoded so callers see plain dicts.
+Wraps the streamable-HTTP transport from the `mcp` SDK and exposes the
+handful of pearscarf tools the orchestrator actually calls. JSON tool-result
+payloads are decoded so callers see plain dicts.
+
+Pearscarf 1.40.1 retired SSE in favor of streamable-HTTP at `/mcp`; this
+client was switched at the same time. The transport returns a 3-tuple
+(read, write, get_session_id); we ignore the third value — pearscarf
+doesn't require session-id propagation from this client.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from contextlib import AsyncExitStack
 from typing import Any
 
 from mcp import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +35,10 @@ class PearscarfClient:
     async def __aenter__(self) -> PearscarfClient:
         self._stack = AsyncExitStack()
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
-        streams = await self._stack.enter_async_context(sse_client(self.url, headers=headers))
-        self._session = await self._stack.enter_async_context(ClientSession(*streams))
+        read, write, _ = await self._stack.enter_async_context(
+            streamablehttp_client(self.url, headers=headers)
+        )
+        self._session = await self._stack.enter_async_context(ClientSession(read, write))
         await self._session.initialize()
         logger.info(f"connected to pearscarf MCP at {self.url}")
         return self
