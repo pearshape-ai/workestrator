@@ -1,9 +1,11 @@
 """Spawn one Claude agent session per intent.
 
-The agent's system prompt is the role's `prompt.md`; its user message is
-the intent body. Pearscarf is attached as an MCP server so the agent can
-read context (`query_facts`, `get_intent`, …) and write outcomes
-(`submit_record`, `set_intent_status`).
+The agent's system prompt is the role manifest — `soul.md` + `skills.md`
+under `<roles_dir>/<owner_role>/` — optionally prepended with a shared
+`<roles_dir>/_pearscarf.md` foundation. Its user message is the intent
+body. Pearscarf is attached as an MCP server so the agent can read context
+(`query_facts`, `get_intent`, …) and write outcomes (`submit_record`,
+`set_intent_status`).
 """
 
 from __future__ import annotations
@@ -104,8 +106,14 @@ class AgentRunner:
         return self._adapters[runtime]
 
     def resolve_role_key(self, intent: dict[str, Any]) -> str | None:
-        """Prefer `owner` (specific identity) over `owner_role` (function)."""
-        return intent.get("owner") or intent.get("owner_role")
+        """Resolve the directory key under `roles_dir`.
+
+        The role's canonical path slug is `owner_role` (e.g. `gtm`,
+        `gtm/linkedin-prospecting`). `owner` is the agent's identity for
+        audit/display (e.g. `Greg`, `Linus`) — never a directory key. Fall
+        back to `owner` only if `owner_role` is missing.
+        """
+        return intent.get("owner_role") or intent.get("owner")
 
     def load_role_prompt(self, role_key: str) -> str | None:
         """Assemble the dispatched session's system prompt.
@@ -153,8 +161,9 @@ class AgentRunner:
         role_prompt = self.load_role_prompt(role_key)
         if not role_prompt:
             logger.warning(
-                f"no prompt found for role {role_key!r} at "
-                f"{self.roles_dir / role_key / 'prompt.md'} — skipping {intent_id}"
+                f"no role manifest found for {role_key!r} at "
+                f"{self.roles_dir / role_key}/ (expected soul.md + skills.md) — "
+                f"skipping {intent_id}"
             )
             return
 
