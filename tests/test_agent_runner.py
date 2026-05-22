@@ -23,14 +23,18 @@ def _runner(roles_dir: Path, events: EventEmitter | None = None) -> AgentRunner:
     )
 
 
-def test_resolve_role_prefers_owner(tmp_path: Path) -> None:
+def test_resolve_role_prefers_owner_role(tmp_path: Path) -> None:
+    # The directory key under roles_dir is the canonical role-path slug
+    # (owner_role), not the agent's identity (owner).
     r = _runner(tmp_path)
-    assert r.resolve_role_key({"owner": "hex", "owner_role": "head-eng"}) == "hex"
+    assert r.resolve_role_key({"owner": "hex", "owner_role": "head-eng"}) == "head-eng"
 
 
-def test_resolve_role_falls_back_to_owner_role(tmp_path: Path) -> None:
+def test_resolve_role_falls_back_to_owner(tmp_path: Path) -> None:
+    # Legacy intents that pre-date the owner/owner_role split may carry only
+    # `owner`. Accept it as the directory key in that case.
     r = _runner(tmp_path)
-    assert r.resolve_role_key({"owner": None, "owner_role": "head-eng"}) == "head-eng"
+    assert r.resolve_role_key({"owner": "hex", "owner_role": None}) == "hex"
 
 
 def test_resolve_role_none_when_neither(tmp_path: Path) -> None:
