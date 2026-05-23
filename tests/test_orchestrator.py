@@ -329,7 +329,10 @@ def test_dispatch_does_not_force_cancel_when_agent_set_done(tmp_path: Path) -> N
 
 
 def test_wake_coordinator_wakes_when_no_children_and_past_debounce(tmp_path: Path) -> None:
-    """A coordinator with zero in-flight children + past debounce → re-dispatch."""
+    """A coordinator with zero in-flight children + past debounce → re-dispatch.
+    The agent discovers wake-vs-fresh by querying its own children via
+    `query_intents(parent=<this_id>)` — workestrator does not pass any
+    extra metadata."""
 
     async def run() -> None:
         cfg = _config(tmp_path)

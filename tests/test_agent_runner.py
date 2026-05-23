@@ -141,6 +141,48 @@ def test_build_user_message_accepts_id_field(tmp_path: Path) -> None:
     assert "intent_z" in msg
 
 
+def test_load_role_prompt_loads_coordinator_md_only_for_coordinator(tmp_path: Path) -> None:
+    """`_coordinator.md` is prepended between `_pearscarf.md` and the persona,
+    but only when intent_type=coordinator. Executors don't see it."""
+    (tmp_path / "_pearscarf.md").write_text("# shared foundation")
+    (tmp_path / "_coordinator.md").write_text("# coordinator contract")
+    (tmp_path / "gtm").mkdir()
+    (tmp_path / "gtm" / "soul.md").write_text("# Greg soul")
+    (tmp_path / "gtm" / "skills.md").write_text("# Greg skills")
+    r = _runner(tmp_path)
+
+    coord_out = r.load_role_prompt("gtm", intent_type="coordinator")
+    assert coord_out is not None
+    assert "# coordinator contract" in coord_out
+    # Order: shared → coordinator → persona
+    assert (
+        coord_out.index("# shared foundation")
+        < coord_out.index("# coordinator contract")
+        < coord_out.index("# Greg soul")
+    )
+
+    exec_out = r.load_role_prompt("gtm", intent_type="executor")
+    assert exec_out is not None
+    assert "# coordinator contract" not in exec_out
+
+    default_out = r.load_role_prompt("gtm")
+    assert default_out is not None
+    assert "# coordinator contract" not in default_out
+
+
+def test_load_role_prompt_skips_coordinator_md_when_absent(tmp_path: Path) -> None:
+    """No `_coordinator.md` file → coordinator-kind load still works."""
+    (tmp_path / "_pearscarf.md").write_text("# shared foundation")
+    (tmp_path / "gtm").mkdir()
+    (tmp_path / "gtm" / "soul.md").write_text("# Greg soul")
+    (tmp_path / "gtm" / "skills.md").write_text("# Greg skills")
+    r = _runner(tmp_path)
+    out = r.load_role_prompt("gtm", intent_type="coordinator")
+    assert out is not None
+    assert "# shared foundation" in out
+    assert "# Greg soul" in out
+
+
 # ---- per-message event emission ----
 
 

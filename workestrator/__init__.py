@@ -1,6 +1,6 @@
 """Workestrator — pearscarf-driven agent orchestrator."""
 
-__version__ = "0.11.3"
+__version__ = "0.12.0"
 
 from workestrator.orchestrator import Workestrator
 

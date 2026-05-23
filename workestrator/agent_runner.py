@@ -115,14 +115,24 @@ class AgentRunner:
         """
         return intent.get("owner_role") or intent.get("owner")
 
-    def load_role_prompt(self, role_key: str) -> str | None:
+    def load_role_prompt(
+        self,
+        role_key: str,
+        *,
+        intent_type: str | None = None,
+    ) -> str | None:
         """Assemble the dispatched session's system prompt.
 
         Concatenates `<roles_dir>/<role>/soul.md` + `<roles_dir>/<role>/skills.md`.
         Both files must exist; returns None otherwise (dispatch will skip the intent).
 
-        If `<roles_dir>/_pearscarf.md` exists, its content is prepended as a
-        shared foundation that describes PearScarf for every role.
+        Two optional shared files may be prepended in order:
+
+        - `<roles_dir>/_pearscarf.md` — universal PearScarf foundation (every role).
+        - `<roles_dir>/_coordinator.md` — coordinator-runtime contract (only when
+          `intent_type == "coordinator"`). Defines the wake protocol: every
+          session, query children first; decide based on existing state; never
+          treat a wake as a fresh dispatch.
         """
         role_dir = self.roles_dir / role_key
         soul = role_dir / "soul.md"
@@ -130,11 +140,16 @@ class AgentRunner:
         if not (soul.is_file() and skills.is_file()):
             return None
 
-        persona = soul.read_text() + "\n\n---\n\n" + skills.read_text()
+        parts: list[str] = []
         shared = self.roles_dir / "_pearscarf.md"
         if shared.is_file():
-            return shared.read_text() + "\n\n---\n\n" + persona
-        return persona
+            parts.append(shared.read_text())
+        if intent_type == "coordinator":
+            coord = self.roles_dir / "_coordinator.md"
+            if coord.is_file():
+                parts.append(coord.read_text())
+        parts.append(soul.read_text() + "\n\n---\n\n" + skills.read_text())
+        return "\n\n---\n\n".join(parts)
 
     def build_user_message(self, intent: dict[str, Any]) -> str:
         intent_id = intent.get("intent_id") or intent.get("id") or "(unknown)"
@@ -165,7 +180,9 @@ class AgentRunner:
                 "cannot resolve a role directory"
             )
 
-        role_prompt = self.load_role_prompt(role_key)
+        role_prompt = self.load_role_prompt(
+            role_key, intent_type=intent.get("intent_type")
+        )
         if not role_prompt:
             raise FileNotFoundError(
                 f"no role manifest at {self.roles_dir / role_key}/ "
