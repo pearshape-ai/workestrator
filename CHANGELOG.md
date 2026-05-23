@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.0
+- `AgentRunner.load_role_prompt` accepts `intent_type: str | None`. When `intent_type == "coordinator"`, the runner prepends `<roles_dir>/_coordinator.md` (if present) between the `_pearscarf.md` foundation and the role's persona. Coordinator-specific runtime contract (query-children-first protocol, decision matrix, hard rules) lives in that shared file. Coordinator intent bodies focus on *what* to coordinate; *how* coordinator wakes work is the universal contract loaded by the runner.
+- No wake-signaling metadata added to the agent's prompt. Workestrator dispatches coordinators the same on first claim and on every wake — the agent discovers its position in the loop by querying its own children (`query_intents(parent=<this_id>)`) at session start. The graph is the only source of truth.
+
 ## 0.11.3
 - `AgentRunner.run` now raises on undispatchable intents instead of silently early-returning. An intent without `owner_role` (and without `owner`) raises `ValueError`; an intent whose role manifest can't be loaded (missing `soul.md` / `skills.md` under `<roles_dir>/<owner_role>/`) raises `FileNotFoundError`. The orchestrator's `_dispatch` already catches `Exception`, force-cancels via `set_intent_status('cancelled')`, and emits `intent_failed` — so the failure mode now surfaces honestly in the events stream instead of being mis-reported as a clean `coordinator_paused`.
 
