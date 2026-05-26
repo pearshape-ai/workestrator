@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.13.0
+- `load_role_prompt` now also prepends `<roles_dir>/_psc_consumer.md` (if present) right after the `_pearscarf.md` foundation, for every role. The read discipline — how to query PearScarf well — is in the agent's context before its first query, so there's no fetch step to forget (push, not pull).
+
 ## 0.12.0
 - `AgentRunner.load_role_prompt` accepts `intent_type: str | None`. When `intent_type == "coordinator"`, the runner prepends `<roles_dir>/_coordinator.md` (if present) between the `_pearscarf.md` foundation and the role's persona. Coordinator-specific runtime contract (query-children-first protocol, decision matrix, hard rules) lives in that shared file. Coordinator intent bodies focus on *what* to coordinate; *how* coordinator wakes work is the universal contract loaded by the runner.
 - No wake-signaling metadata added to the agent's prompt. Workestrator dispatches coordinators the same on first claim and on every wake — the agent discovers its position in the loop by querying its own children (`query_intents(parent=<this_id>)`) at session start. The graph is the only source of truth.

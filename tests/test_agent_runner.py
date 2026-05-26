@@ -112,6 +112,23 @@ def test_load_role_prompt_prepends_shared_pearscarf(tmp_path: Path) -> None:
     )
 
 
+def test_load_role_prompt_includes_consumer_guide(tmp_path: Path) -> None:
+    (tmp_path / "_pearscarf.md").write_text("# shared foundation")
+    (tmp_path / "_psc_consumer.md").write_text("# read discipline")
+    (tmp_path / "hex").mkdir()
+    (tmp_path / "hex" / "soul.md").write_text("# Hex soul")
+    (tmp_path / "hex" / "skills.md").write_text("# Hex skills")
+    r = _runner(tmp_path)
+    out = r.load_role_prompt("hex")
+    assert out is not None
+    # Order: foundation → read discipline → persona
+    assert (
+        out.index("# shared foundation")
+        < out.index("# read discipline")
+        < out.index("# Hex soul")
+    )
+
+
 def test_load_role_prompt_without_shared_works(tmp_path: Path) -> None:
     """When `_pearscarf.md` is absent, the persona loads on its own."""
     (tmp_path / "hex").mkdir()

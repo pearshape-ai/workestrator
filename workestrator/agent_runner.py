@@ -129,6 +129,9 @@ class AgentRunner:
         Two optional shared files may be prepended in order:
 
         - `<roles_dir>/_pearscarf.md` — universal PearScarf foundation (every role).
+        - `<roles_dir>/_psc_consumer.md` — the read discipline: how to query
+          PearScarf well (every role, so it's in the agent's context before its
+          first query — no fetch step to forget).
         - `<roles_dir>/_coordinator.md` — coordinator-runtime contract (only when
           `intent_type == "coordinator"`). Defines the wake protocol: every
           session, query children first; decide based on existing state; never
@@ -144,6 +147,9 @@ class AgentRunner:
         shared = self.roles_dir / "_pearscarf.md"
         if shared.is_file():
             parts.append(shared.read_text())
+        consumer = self.roles_dir / "_psc_consumer.md"
+        if consumer.is_file():
+            parts.append(consumer.read_text())
         if intent_type == "coordinator":
             coord = self.roles_dir / "_coordinator.md"
             if coord.is_file():
