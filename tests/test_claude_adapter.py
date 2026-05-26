@@ -6,9 +6,15 @@ out-of-band; this file tests only the translation + command-builder logic.
 
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 
-from workestrator.adapters.claude import ClaudeAdapter, _stream_event_to_message_dict
+from workestrator.adapters.claude import (
+    _STREAM_READ_LIMIT,
+    ClaudeAdapter,
+    _stream_event_to_message_dict,
+)
 from workestrator.config import AgentConfig
 
 
@@ -152,3 +158,65 @@ def test_build_command_omits_max_budget_when_unset() -> None:
         user_message="",
     )
     assert "--max-budget-usd" not in cmd
+
+
+class _FakeStdout:
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = lines
+
+    def __aiter__(self):
+        async def _gen():
+            for ln in self._lines:
+                yield ln
+
+        return _gen()
+
+
+class _FakeStderr:
+    async def read(self) -> bytes:
+        return b""
+
+
+class _FakeProc:
+    def __init__(self, lines: list[bytes]) -> None:
+        self.stdout = _FakeStdout(lines)
+        self.stderr = _FakeStderr()
+        self.returncode = 0
+
+    async def wait(self) -> int:
+        return 0
+
+
+def test_dispatch_spawns_with_large_stream_limit(monkeypatch) -> None:
+    """Regression: a computer-use / browser screenshot arrives as one multi-MB
+    base64 `tool_result` line. asyncio's default 64 KiB StreamReader limit made
+    `readline()` raise ('Separator is not found, and chunk exceed the limit'),
+    which crashed the agent session and force-cancelled the intent. The adapter
+    must spawn the subprocess with a generous `limit=` so an oversized line
+    parses instead of killing the session."""
+    captured: dict = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured.update(kwargs)
+        line = (json.dumps({"type": "system", "subtype": "init"}) + "\n").encode()
+        return _FakeProc([line])
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    async def run() -> None:
+        events = [
+            ev
+            async for ev in _adapter().dispatch(
+                intent={"runtime_config": {}},
+                workspace=Path("."),
+                system_prompt="SYS",
+                user_message="USER",
+            )
+        ]
+        assert any(e.get("type") == "system" for e in events)
+
+    asyncio.run(run())
+
+    assert captured.get("limit") == _STREAM_READ_LIMIT
+    # The whole point: comfortably past asyncio's 64 KiB default.
+    assert _STREAM_READ_LIMIT > 64 * 1024

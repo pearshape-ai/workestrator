@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.13.1
+- Give the agent-output stream reader generous headroom (16 MiB). The claude adapter read `claude --print` stream-json line-by-line under asyncio's default 64 KiB limit, so a single oversized line — a browser/computer-use screenshot arriving as one multi-MB base64 `tool_result` — made `readline()` raise and force-cancelled the whole session. Browser-driven agents now survive large tool results.
+
 ## 0.13.0
 - `load_role_prompt` now also prepends `<roles_dir>/_psc_consumer.md` (if present) right after the `_pearscarf.md` foundation, for every role. The read discipline — how to query PearScarf well — is in the agent's context before its first query, so there's no fetch step to forget (push, not pull).
 

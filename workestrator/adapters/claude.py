@@ -32,6 +32,15 @@ from workestrator.config import AgentConfig
 
 logger = logging.getLogger(__name__)
 
+# `claude --print --output-format stream-json` emits one JSON object per line,
+# and a single line can be large — a computer-use / browser screenshot arrives
+# as one base64-image `tool_result` line of several MB. asyncio's default
+# StreamReader limit is 64 KiB, past which `readline()` raises ValueError
+# ("Separator is not found, and chunk exceed the limit") and the whole session
+# crashes. Give the reader generous headroom so an oversized line parses
+# instead of killing the agent.
+_STREAM_READ_LIMIT = 16 * 1024 * 1024  # 16 MiB
+
 
 def _stream_event_to_message_dict(ev: dict[str, Any]) -> dict[str, Any]:
     """Translate a stream-json event to a normalized message dict.
@@ -120,6 +129,7 @@ class ClaudeAdapter:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(workspace),
+            limit=_STREAM_READ_LIMIT,
         )
         try:
             assert proc.stdout is not None  # PIPE is set
