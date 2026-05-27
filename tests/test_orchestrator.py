@@ -539,3 +539,59 @@ def test_tick_skips_already_running_intents(tmp_path: Path) -> None:
             await asyncio.gather(running_task, return_exceptions=True)
 
     asyncio.run(run())
+
+
+def test_run_reconnects_after_connection_loss(tmp_path: Path, monkeypatch) -> None:
+    """A dropped pearscarf connection (e.g. transient DNS failure) must not kill
+    the daemon — it reconnects with backoff and keeps polling. Only cancellation
+    exits. Regression for the crash loop where one ConnectError tore down run()."""
+    import workestrator.orchestrator as orch
+
+    state = {"connects": 0}
+
+    class FakeClient:
+        def __init__(self, url: str, api_key: str | None = None) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            state["connects"] += 1
+            return self
+
+        async def __aexit__(self, *exc_info) -> bool:
+            return False
+
+        async def query_intents(self, **kwargs):
+            if state["connects"] == 1:
+                # First connection: drop, as a DNS blip would.
+                raise ConnectionError("nodename nor servname provided, or not known")
+            # Second connection is healthy — end the test by cancelling.
+            raise asyncio.CancelledError()
+
+        async def get_intent(self, *a, **k):
+            return None
+
+        async def set_intent_status(self, *a, **k):
+            return {}
+
+    monkeypatch.setattr(orch, "PearscarfClient", FakeClient)
+    # Shrink the backoff so the test doesn't actually wait 5s.
+    monkeypatch.setattr(Workestrator, "_RECONNECT_BACKOFF_MIN", 0.001)
+    monkeypatch.setattr(Workestrator, "_RECONNECT_BACKOFF_MAX", 0.001)
+
+    cfg = _config(tmp_path)
+    w = Workestrator(cfg)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(w.run())
+
+    # Reconnected after the failure rather than dying on the first error.
+    assert state["connects"] == 2
+
+    events = [
+        json.loads(line)
+        for line in cfg.events.log_path.read_text().splitlines()
+        if line.strip()
+    ]
+    kinds = [e["event"] for e in events]
+    assert "connection_lost" in kinds          # surfaced the drop
+    assert kinds.count("daemon_started") == 2   # booted, dropped, booted again
+    assert "daemon_stopping" in kinds           # clean shutdown on cancel

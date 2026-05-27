@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 
 
 class Workestrator:
+    # A dropped pearscarf connection (e.g. a transient DNS failure resolving
+    # the MCP host) tears down the MCP session. Rather than die, the run loop
+    # reconnects with exponential backoff bounded by these.
+    _RECONNECT_BACKOFF_MIN = 5.0
+    _RECONNECT_BACKOFF_MAX = 60.0
+
     def __init__(self, config: Config) -> None:
         self.config = config
         self.workspace = WorkspaceManager(config.workspace.dir)
@@ -33,35 +39,61 @@ class Workestrator:
         self._last_wake: dict[str, float] = {}
 
     async def run(self) -> None:
-        """Run the orchestrator loop until cancelled."""
-        async with PearscarfClient(
-            url=self.config.pearscarf.mcp_url,
-            api_key=self.config.pearscarf.api_key,
-        ) as pearscarf:
-            agent_runner = AgentRunner(
-                config=self.config.agent,
-                roles_dir=self.config.roles.dir,
-                pearscarf_url=self.config.pearscarf.mcp_url,
-                pearscarf_api_key=self.config.pearscarf.api_key,
-                events=self.events,
-            )
-            self.events.emit(
-                "daemon_started",
-                poll_interval_seconds=self.config.orchestrator.poll_interval_seconds,
-                max_concurrent_agents=self.config.orchestrator.max_concurrent_agents,
-            )
-            try:
-                while True:
-                    await self.tick(pearscarf, agent_runner)
-                    await asyncio.sleep(self.config.orchestrator.poll_interval_seconds)
-            except asyncio.CancelledError:
-                logger.info("orchestrator cancelled — waiting for running agents")
-                self.events.emit("daemon_stopping", in_flight=len(self._running))
-                for task in self._running.values():
-                    task.cancel()
-                if self._running:
-                    await asyncio.gather(*self._running.values(), return_exceptions=True)
-                raise
+        """Run the orchestrator loop until cancelled.
+
+        Resilient to transient pearscarf connection loss: a dropped MCP
+        connection (e.g. an intermittent DNS failure on the host) tears down
+        the session, so we log it, emit `connection_lost`, and reconnect with
+        capped backoff instead of letting the daemon die. Only cancellation
+        (clean `/wf-stop` shutdown) exits the loop.
+        """
+        backoff = self._RECONNECT_BACKOFF_MIN
+        try:
+            while True:
+                try:
+                    async with PearscarfClient(
+                        url=self.config.pearscarf.mcp_url,
+                        api_key=self.config.pearscarf.api_key,
+                    ) as pearscarf:
+                        agent_runner = AgentRunner(
+                            config=self.config.agent,
+                            roles_dir=self.config.roles.dir,
+                            pearscarf_url=self.config.pearscarf.mcp_url,
+                            pearscarf_api_key=self.config.pearscarf.api_key,
+                            events=self.events,
+                        )
+                        self.events.emit(
+                            "daemon_started",
+                            poll_interval_seconds=self.config.orchestrator.poll_interval_seconds,
+                            max_concurrent_agents=self.config.orchestrator.max_concurrent_agents,
+                        )
+                        backoff = self._RECONNECT_BACKOFF_MIN  # healthy: reset backoff
+                        while True:
+                            await self.tick(pearscarf, agent_runner)
+                            await asyncio.sleep(
+                                self.config.orchestrator.poll_interval_seconds
+                            )
+                # CancelledError is BaseException — it skips this handler and
+                # propagates to the shutdown handler below.
+                except Exception as exc:
+                    logger.exception(
+                        "orchestrator lost its pearscarf connection — reconnecting"
+                    )
+                    self.events.emit(
+                        "connection_lost",
+                        error=str(exc)[:240],
+                        retry_in_seconds=backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, self._RECONNECT_BACKOFF_MAX)
+        except asyncio.CancelledError:
+            logger.info("orchestrator cancelled — waiting for running agents")
+            self.events.emit("daemon_stopping", in_flight=len(self._running))
+            for task in self._running.values():
+                task.cancel()
+            if self._running:
+                await asyncio.gather(*self._running.values(), return_exceptions=True)
+            raise
 
     async def tick(self, pearscarf: PearscarfClient, agent_runner: AgentRunner) -> None:
         """One poll-and-dispatch pass."""

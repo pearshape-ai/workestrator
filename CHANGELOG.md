@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.14.0
+- Survive transient pearscarf connection loss. A dropped MCP connection — e.g. an intermittent DNS failure resolving the host — tore down the session and killed the whole daemon. The run loop now logs it, emits a `connection_lost` event, and reconnects with capped exponential backoff instead of crashing; only a clean shutdown (cancellation) exits.
+
 ## 0.13.1
 - Give the agent-output stream reader generous headroom (16 MiB). The claude adapter read `claude --print` stream-json line-by-line under asyncio's default 64 KiB limit, so a single oversized line — a browser/computer-use screenshot arriving as one multi-MB base64 `tool_result` — made `readline()` raise and force-cancelled the whole session. Browser-driven agents now survive large tool results.
 
