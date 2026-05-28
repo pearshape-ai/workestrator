@@ -123,10 +123,14 @@ class AgentRunner:
     ) -> str | None:
         """Assemble the dispatched session's system prompt.
 
-        Concatenates `<roles_dir>/<role>/soul.md` + `<roles_dir>/<role>/skills.md`.
-        Both files must exist; returns None otherwise (dispatch will skip the intent).
+        Concatenates `<roles_dir>/<role>/soul.md` + `<roles_dir>/<role>/skills.md`,
+        plus an optional `<roles_dir>/<role>/op-delta.md` (the role's record-grain
+        carve-out, appended after skills if present — declares the role's
+        specific operational-delta atom on top of the general rule in
+        `_pearscarf.md`). Both soul and skills must exist; returns None
+        otherwise (dispatch will skip the intent).
 
-        Two optional shared files may be prepended in order:
+        Optional shared files may be prepended in order:
 
         - `<roles_dir>/_pearscarf.md` — universal PearScarf foundation (every role).
         - `<roles_dir>/_psc_consumer.md` — the read discipline: how to query
@@ -155,6 +159,9 @@ class AgentRunner:
             if coord.is_file():
                 parts.append(coord.read_text())
         parts.append(soul.read_text() + "\n\n---\n\n" + skills.read_text())
+        op_delta = role_dir / "op-delta.md"
+        if op_delta.is_file():
+            parts.append(op_delta.read_text())
         return "\n\n---\n\n".join(parts)
 
     def build_user_message(self, intent: dict[str, Any]) -> str:

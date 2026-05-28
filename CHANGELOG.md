@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.15.0
+- The role-prompt loader now appends an optional `<role>/op-delta.md` after `skills.md` when present. This is the role's record-grain carve-out — a small file declaring what counts as an operational delta for that role, on top of the general rule in `_pearscarf.md`. Loads next to `soul.md` + `skills.md` if it exists, ignored if not — backward-compatible with roles that don't ship one.
+
 ## 0.14.0
 - Survive transient pearscarf connection loss. A dropped MCP connection — e.g. an intermittent DNS failure resolving the host — tore down the session and killed the whole daemon. The run loop now logs it, emits a `connection_lost` event, and reconnects with capped exponential backoff instead of crashing; only a clean shutdown (cancellation) exits.
 
