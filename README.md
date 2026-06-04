@@ -1,5 +1,8 @@
 # Workestrator
 
+<img width="562" height="640" alt="workestrator-logo" src="https://github.com/user-attachments/assets/33641c1b-200a-42f5-b95b-a2087d044f82" />
+
+
 A pearscarf-driven Claude orchestrator. Reads intents from a pearscarf MCP server, dispatches Claude agents to do the work, watches for completion. Stays out of the way.
 
 Built as the orchestration layer underneath [pearscarf](https://github.com/pearshape-ai/pearscarf)-based AI workforce setups. Currently coupled to pearscarf (as the intent source) and Claude (via [`claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-python)) — both may become pluggable in future versions.
