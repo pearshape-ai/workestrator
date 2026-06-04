@@ -1,6 +1,8 @@
 # Workestrator
 
-<img width="562" height="640" alt="workestrator-logo" src="https://github.com/user-attachments/assets/33641c1b-200a-42f5-b95b-a2087d044f82" />
+<p align="center">
+  <img src="assets/workestrator.png" alt="Workestrator" width="320" />
+</p>
 
 
 A pearscarf-driven Claude orchestrator. Reads intents from a pearscarf MCP server, dispatches Claude agents to do the work, watches for completion. Stays out of the way.
